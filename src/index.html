@@ -1,0 +1,36 @@
+<meta name="viewport" content="width=device-width">
+<style>
+input[type="button"] {
+	margin: 0 1em;
+}
+.input-field {
+	margin: 2em 0;
+}
+.select-filter[data-filter="today"] > [data-filter="today"],
+.select-filter[data-filter="tomorrow"] > [data-filter="tomorrow"],
+.select-filter[data-filter="exams"] > [data-filter="exams"] {
+	border-style: inset;
+}
+.output-field {
+	border: 1px solid black;
+	border-radius: 4px;
+	white-space: pre;
+	font-family: monospace;
+	padding: 8px;
+	min-height: 30px;
+}
+small {
+	color: #b0b0b0;
+}
+html {
+	font-family: Verdana;
+}
+</style>
+
+
+<script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
+<script type="module">
+import {main} from './index.js';
+
+window.onload = main;
+</script>

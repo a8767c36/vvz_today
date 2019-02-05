@@ -1,0 +1,379 @@
+<!DOCTYPE HTML>
+<meta name="viewport" content="width=device-width">
+<script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
+
+<style>
+input[type="button"] {
+	margin: 0 1em;
+}
+.input-field {
+	margin: 2em 0;
+}
+#what[data-what="today"] > [data-what="today"],
+#what[data-what="tomorrow"] > [data-what="tomorrow"],
+#what[data-what="exams"] > [data-what="exams"] {
+	border-style: inset;
+}
+#output {
+	border: 1px solid black;
+	border-radius: 4px;
+	white-space: pre;
+	font-family: monospace;
+	padding: 8px;
+	min-height: 30px;
+}
+small {
+	color: #b0b0b0;
+}
+</style>
+
+
+
+<input type="button" style="float: right" onclick="clear_cache()" value="clear Cache (expert)">
+<div class="input-field" id="semester" style="display: none"></div>
+<div class="input-field">StudienProgrammLeitung: <select id="spl"></select></div>
+<div class="input-field" id="what"></div>
+
+Output of crawling:<br>
+<div id="output"></div>
+
+
+
+<script>
+function createElement_SelectSemester (container, continuation) {
+	function getCurrentSemester () {
+		let date = new Date();
+		let year = isInRange(/* Januar bis Maerz */ 1, date.getMonth()+1, 3) ? date.getFullYear()-1 : date.getFullYear();
+		let isSummer = isInRange(/* April bis September */ 4, date.getMonth()+1, 9);
+		return year + (isSummer ? 'S' : 'W');
+	}
+
+	let semester = getCurrentSemester();
+	$(container)
+	.empty()
+	.append('Semester: ' + semester);
+	continuation(semester);
+}
+
+function createElement_SelectSPLs (container, spls, continuation) {
+	$(container)
+	.empty()
+	.append('<option value="">--- Please select ---</option>')
+	.append(spls.map(({id, longname_de}) => $('<option></option>').attr('value', id).text(longname_de)))
+	.append($('<option></option>').attr('value', spls.map(mod => mod.id).join(',')).text('^^ Alle ^^'))
+	.off('change')
+	.on('change', ({currentTarget: {value: spl_ids}}) => continuation(spl_ids.split(',').filter(x => x)))
+	.trigger('change')
+	;
+}
+
+function createElement_SelectWhat (container, continuation) {
+	let options = { today: 'Today', tomorrow: 'Tomorrow', exams: 'Exams' };
+	$(container)
+	.empty()
+	.append(Object.keys(options).map(key => $('<input type="button">').val(options[key]).on('click', () => continuation(key)).attr('data-what', key)))
+	.children().first()
+		.click()
+	;
+}
+
+window.onload = function init () {
+	let _semester = '???';
+	let _spl_ids = [ ];
+	let _what = 'today';
+
+	createElement_SelectWhat('#what', what =>  {
+		_what = what;
+		$('#what').attr('data-what', what);
+		$('#spl').focus();
+		crawl(_semester, _spl_ids, what);
+	})
+
+	$('#spl').focus();
+	createElement_SelectSemester('#semester', async function (semester) {
+		createElement_SelectSPLs('#spl', [ ], spl_ids => void spl_ids /* no-op */)
+		createElement_SelectSPLs('#spl', await cached_or_calc(['getModulesForSemester', semester], () => getModulesForSemester(semester)), function (spl_ids) {
+			_semester = semester;
+			_spl_ids = spl_ids
+			crawl(semester, spl_ids, _what);
+		})
+	})
+}
+
+
+
+
+async function crawl (semester, spl_ids, what) {
+	console.log('Crawling:', semester, spl_ids, what);
+	$('#output').text('Loading, please wait...\n(This could take a minute on first run.)');
+ await timeout(0);
+	_run(semester, spl_ids, what)
+	.catch(err => { $('#output').append(textNode(`\n\nAn error occurred :(\n\n${err.stack}`)); console.error(err) })
+}
+async function _run (semester, modules, what) {
+	// Root module: https://m1-ufind.univie.ac.at/courses/browse/2018W
+	// let modules = await download('https://m1-ufind.univie.ac.at/courses/browse/' + modId)
+	// .then(text => $(text).find('module[level=1]').map((i, e) => $(e).attr('id')).get())
+
+	let courses = [ ];
+	for (let modId of modules) {
+		courses.push(...await getCoursesForModule(modId));
+		console.log('Now %d courses...', courses.length);
+		// await timeout(10);
+	}
+	courses = array_unique(courses);
+
+	let infos = [ ];
+	for (let crsId of courses) {
+		infos.push(await getInfoForCourse(crsId).catch(err => null));
+		// console.log('Got course info:', infos[infos.length-1]);
+		// console.log('Got course info: #%s', infos[infos.length-1].id);
+		// await timeout(10);
+	}
+	for (let modId of modules) {
+		infos.push(...await getExamsForModule(modId));
+	}
+	// console.log('Courses\' info:', infos);
+	console.log('Received Courses\' info .length:', infos.length);
+	infos = infos.filter(x => x);
+	window.infos = infos;
+
+
+	// crawling done, now presentation
+	// first, replace 'events' by 'exams' if desired
+	(what == 'exams') && infos.forEach(info => info.events = info.exams);
+	// filter: pass those that start today
+	/*infos.forEach(info =>  info.events = info.events.filter(
+		event => isInRange(-1, (new Date(event.begin) - new Date()) / 1000 / 3600 / 24, 1)
+			&& new Date(event.begin).getDate() == new Date().getDate()
+	))*/
+	let todayMidnight = new Date(new Date().setHours(0,0,0,0));
+	infos.forEach(info =>  info.events = info.events.filter({
+		today:    event => isInRange(0, (new Date(event.begin) - todayMidnight) /1000/3600/24,  1),
+		tomorrow: event => isInRange(1, (new Date(event.begin) - todayMidnight) /1000/3600/24,  2),
+		exams:    event => isInRange(0, (new Date(event.begin) - todayMidnight) /1000/3600/24, 56), // eight week preview
+	}[what]
+	))
+	infos = infos.filter(
+		info => info.events.length > 0
+	)
+	infos = infos.sort(
+		(a, b) => a.events[0].begin > b.events[0].begin ? 1 : -1
+	)
+	$('#output').empty().append(...infos.map(
+		info => [
+			$('<span>').html(
+				$('<span>').text(info.events.map(event => `${formatTimeRange(event.begin, event.end)}   _${event.address}_`).join(',\n') + '\n')
+				.html().replace(/(\s*)_([^_]*)_([^\n]*)/g, '$3$1<small>$2</small>')
+			),
+			textNode('\t=> '),
+			$('<a target="_blank">')
+				// .attr('href', `https://ufind.univie.ac.at/de/course.html?lv=${info.id}&semester=2018W`)
+				.attr('href', info.href)
+				.text(`${info.id}  ${info.type} ${info.longname_de}\n`),
+			$('\n'),
+		]
+	))
+}
+
+
+
+async function getModulesForSemester (semester) {
+	let xml = await download('https://m1-ufind.univie.ac.at/courses/browse/' + semester);
+	return $(xml).find('module[level=1]').map((i, e) => ({id: $(e).attr('id'), longname_de: $(e).find('> title[xml\\:lang=de]').text()})).get();
+}
+
+async function getCoursesForModule (modId) {
+	return cached_or_calc(['getCoursesForModule', modId], async () => {
+		let text = await download('https://m1-ufind.univie.ac.at/courses/browse/' + modId);
+		return $(text).find('course')
+//			.children("type:contains('VO')").parent()
+			.children("type:contains('V')").parent()  // VO / VU
+		.map((i, e) => $(e).attr('id')).get();
+	})
+}
+
+async function getInfoForCourse (crsId) {
+	return cached_or_calc(['getInfoForCourse', crsId], async () => {
+		let tree = $(await download('https://m1-ufind.univie.ac.at/courses/' + crsId + '/2018W'));
+		let info = {
+			id: crsId,
+			type: tree.find('type').text(),
+			longname_en: tree.find('longname[xml\\:lang=en]').text(),
+			longname_de: tree.find('longname[xml\\:lang=de]').text(),
+			events: tree.find('wwevent').map(
+					(i, e) => ({
+						begin:   $(e).attr('begin'),
+						end:     $(e).attr('end'),
+						zip:     $(e).find('zip').text(),
+						town:    $(e).find('town').text(),
+						address: $(e).find('address').text(),
+						room:    $(e).find('room').text(),
+					})
+				).get(),
+			exams: tree.find('exam').map(
+					(i, e) => ({
+						begin:   $(e).attr('begin'),
+						end:     $(e).attr('end'),
+						zip:     $(e).find('zip').text(),
+						town:    $(e).find('town').text(),
+						address: $(e).find('address').text(),
+						room:    $(e).find('room').text(),
+					})
+				).get(),
+			offeredby: tree.find('offeredby').text(),
+			href: `https://ufind.univie.ac.at/de/course.html?lv=${crsId}&semester=2018W`,
+		};
+		return info;
+	})
+}
+
+async function getExamsForModule (modId) {
+	return cached_or_calc(['getExamsForModule', modId], async () => {
+		let tree = $(await download('https://m1-ufind.univie.ac.at/courses/browse/' + modId));
+		return tree.find('exam').map(
+				(i, e) => ({
+					id: $(e).parent().parent().attr('id'),
+					type: 'Exam',
+					longname_en: $(e).find('title[xml\\:lang=en]').text(),
+					longname_de: $(e).find('title[xml\\:lang=en]').text(),
+					events: [ ],
+					exams: [{
+						begin:   $(e).attr('begin'),
+						end:     $(e).attr('end'),
+						zip:     $(e).find('zip').text(),
+						town:    $(e).find('town').text(),
+						address: $(e).find('address').text(),
+						room:    $(e).find('room').text(),
+					}],
+					offeredby: tree.find('offeredby').text(),
+					href: `https://ufind.univie.ac.at/de/exam.html?mod=${$(e).parent().parent().attr('id')}&eq=${$(e).attr('equality')}&semester=2018W`,
+		})).get();
+	})
+}
+
+
+
+function array_unique (arr) {
+	let ret = [];
+	for (let elem of arr) {
+		if (!ret.includes(elem)) { ret.push(elem) }
+	}
+	return ret;
+}
+
+function isInRange (min, val, max) {
+	return min <= val && val <= max;
+}
+
+function formatTimeRange (begin, end, lang = 'de-DE') {
+	return (
+		new Date(begin).toLocaleString(lang, { day: 'numeric', month: '2-digit', hour: 'numeric', minute: '2-digit' })
+		+ ' - ' +
+		new Date(end).toLocaleString(lang, { hour: 'numeric', minute: '2-digit' })
+	)
+}
+
+function textNode (text) {
+	return document.createTextNode(text);
+}
+
+async function download (url) {
+	return fetch(url)
+	.then(res => res.ok ? res : _throw(res))
+	.then(res => res.text())
+}
+
+async function download_cache (url) {
+	return cached_or_calc(['download', url], () => download(url));
+}
+
+
+
+
+function _throw (err) { throw err }
+
+Array.prototype.sortBy = function (f) {
+	this.sort((a, b) => f(a) > f(b) ? 1 : -1);
+}
+
+async function timeout (ms) {
+	return new Promise(fulfill => setTimeout(fulfill, ms));
+}
+
+// if available, return cached data, otherwise generate and cache data
+/* use like this:
+await store.set('my-key', 'Tjksdjflaksdjf;adsf');
+console.log(await store.get('my-key'));
+*/
+let cache;
+async function cached_or_calc (id, f) {  // id: String|Array; f: Function
+	cache = cache || await openStore(window.indexedDB, 'vvz_crawler_cache')
+		.catch(err => ({ get: Promise.reject, set: Promise.reject })); // in case indexedDB isn't available
+	id = typeof id == 'string' ? id : id.join(' ');
+	try {
+		let cache_hit = await cache.get(id);
+		if (cache_hit !== undefined) {
+			return cache_hit;
+		}
+	} catch (err) { console.error(err) }
+	let data = await f();
+	cache.set(id, data).catch(console.error); // asynchronously
+	return data;
+}
+
+async function clear_cache () {
+	if (confirm('Clearing the Cache means that all data has to be re-downloaded. Do you want to continue?')) {
+		await cache.clear();
+		alert('Done!');
+	}
+}
+
+
+async function openStore (indexedDB = window.indexedDB, name = 'MyDatabase') {
+	let db = await new Promise(function (fulfill, reject) {
+		let request = indexedDB.open(name, 1);
+		request.onsuccess = (event) => fulfill(request.result);
+		request.onerror   = (event) => reject (request.error);
+		request.onupgradeneeded = (event) => request.result.createObjectStore('myStore');
+	});
+	return {
+		async set (key, value) {
+			return new Promise(function (fulfill, reject) {
+				let transaction = db.transaction('myStore', 'readwrite');
+				let store = transaction.objectStore('myStore');
+				let request = store.put(value, key);
+				request.onsuccess = (event) => fulfill();
+				request.onerror   = (event) => reject(request.error);
+			})
+		},
+		async get (key) {
+			return new Promise(function (fulfill, reject) {
+				let transaction = db.transaction('myStore', 'readonly');
+				let store = transaction.objectStore('myStore');
+				let request = store.get(key);
+				request.onsuccess = (event) => fulfill(request.result);
+				request.onerror   = (event) => reject(request.error);
+			})
+		},
+		async clear () {
+			return new Promise(function (fulfill, reject) {
+				let transaction = db.transaction('myStore', 'readwrite');
+				let store = transaction.objectStore('myStore');
+				let request = store.clear();
+				request.onsuccess = (event) => fulfill();
+				request.onerror   = (event) => reject(request.error);
+			})
+		},
+		async remove (key) {
+			return new Promise(function (fulfill, reject) {
+				let transaction = db.transaction('myStore', 'readwrite');
+				let store = transaction.objectStore('myStore');
+				let request = store.delete(key);
+				request.onsuccess = (event) => fulfill();
+				request.onerror   = (event) => reject(request.error);
+			})
+		},
+	}
+}
+</script>

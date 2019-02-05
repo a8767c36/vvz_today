@@ -1,0 +1,24 @@
+<script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
+<script type="module">
+import {generate_bundle} from './generate_bundle.js';
+
+window.onload = async function () {
+	$('<div>')
+	.appendTo(document.body)
+	.html('Loading, please wait...<br>See developer console,<br>in case anything goes wrong, it\'ll be logged there.<br><br>')
+
+	let bundle = await generate_bundle();
+	// let bundle = { aaa: 'This is a.', bbb: 'This is b.' };
+	console.log(bundle);
+	let json = JSON.stringify(bundle);
+	let file = new Blob([json], {type: 'application/octet-stream'});
+	let url  = URL.createObjectURL(file);
+
+	console.log('All done! Please click link...');
+	$('<a>')
+	.appendTo(document.body)
+	.attr('href', url)
+	.text('Download bundle')
+	.attr('download', 'data_bundle.json')
+}
+</script>
