@@ -2,6 +2,7 @@ import {openStore} from './lib/data-cache-browser.js';
 
 let baseURLs = [
 	'./',
+	'https://a8767c36.github.io/vvz_today/',
 ];
 let cache = null;
 

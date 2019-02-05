@@ -1,6 +1,6 @@
 {
   "name": "vvz_today",
-  "version": "1.0.0",
+  "version": "1.5.0",
   "description": "VVZ today",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -14,10 +14,5 @@
   "bugs": {
     "url": "https://github.com/a8767c36/vvz_today/issues"
   },
-  "homepage": "https://github.com/a8767c36/vvz_today#readme",
-  "devDependencies": {
-    "rollup": "^1.1.2",
-    "rollup-plugin-fill-html": "^1.1.0",
-    "rollup-plugin-html": "^0.2.1"
-  }
+  "homepage": "https://github.com/a8767c36/vvz_today#readme"
 }

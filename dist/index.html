@@ -1,0 +1,275 @@
+<meta name="viewport" content="width=device-width">
+<style>
+input[type="button"] {
+	margin: 0 1em;
+}
+.input-field {
+	margin: 2em 0;
+}
+.select-filter[data-filter="today"] > [data-filter="today"],
+.select-filter[data-filter="tomorrow"] > [data-filter="tomorrow"],
+.select-filter[data-filter="exams"] > [data-filter="exams"] {
+	border-style: inset;
+}
+.output-field {
+	border: 1px solid black;
+	border-radius: 4px;
+	white-space: pre;
+	font-family: monospace;
+	padding: 8px;
+	min-height: 30px;
+}
+small {
+	color: #b0b0b0;
+}
+html {
+	font-family: Verdana;
+}
+</style>
+
+
+<script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
+<script type="module">
+// a simple data cache for the browser
+// (persistency across page refreshes)
+// based on indexedDB
+
+/*
+API:
+async function openStore (indexedDB :: IndexedDB, name :: String) :: class {
+	async function set (key :: String, value :: *);
+	async function get (key :: String) :: *;
+	async function clear ();
+	async function remove (key :: String);
+}
+
+Behavior should be self-explanatory.
+
+Side-note:
+It took me a while to decide whether to call it `openStore' or `openStorage'.
+I read up the difference, and it seems that the suffix -age indicates
+that something is rather unstructured, so storage is a "pile/heap of data"
+while store is "data in a certain structure/format".
+Since indexedDB's data content in inherently structured (even if there is no scheme),
+I finally settled to `openStore'.
+*/
+
+async function openStore (indexedDB = window.indexedDB, name = 'MyDatabase') {
+	let db = await new Promise(function (fulfill, reject) {
+		let request = indexedDB.open(name, 1);
+		request.onsuccess = (event) => fulfill(request.result);
+		request.onerror   = (event) => reject (request.error);
+		request.onupgradeneeded = (event) => request.result.createObjectStore('myStore');
+	});
+	return {
+		async set (key, value) {
+			return new Promise(function (fulfill, reject) {
+				let transaction = db.transaction('myStore', 'readwrite');
+				let store = transaction.objectStore('myStore');
+				let request = store.put(value, key);
+				request.onsuccess = (event) => fulfill();
+				request.onerror   = (event) => reject(request.error);
+			})
+		},
+		async get (key) {
+			return new Promise(function (fulfill, reject) {
+				let transaction = db.transaction('myStore', 'readonly');
+				let store = transaction.objectStore('myStore');
+				let request = store.get(key);
+				request.onsuccess = (event) => fulfill(request.result);
+				request.onerror   = (event) => reject(request.error);
+			})
+		},
+		async clear () {
+			return new Promise(function (fulfill, reject) {
+				let transaction = db.transaction('myStore', 'readwrite');
+				let store = transaction.objectStore('myStore');
+				let request = store.clear();
+				request.onsuccess = (event) => fulfill();
+				request.onerror   = (event) => reject(request.error);
+			})
+		},
+		async remove (key) {
+			return new Promise(function (fulfill, reject) {
+				let transaction = db.transaction('myStore', 'readwrite');
+				let store = transaction.objectStore('myStore');
+				let request = store.delete(key);
+				request.onsuccess = (event) => fulfill();
+				request.onerror   = (event) => reject(request.error);
+			})
+		},
+	}
+}
+
+let baseURLs = [
+	'./',
+	'https://a8767c36.github.io/vvz_today/',
+];
+
+async function load_data () {
+	const cache = await openStore(window.indexedDB, 'vvz_today_cache');
+	let data_version_local = await cache.get('data_version');
+	let data_version_remote = await fetchFromBase('data_version.txt').then(res => res.text()).catch(err => data_version_local);
+	let data = null;
+	if (data_version_local != data_version_remote) {
+		console.log('Fetching remote data...');
+		data = await fetchFromBase('data_bundle.json').then(res => res.json());
+		cache.set('bundle', data);
+		cache.set('data_version', data_version_remote);
+		console.log('Fetching remote data... done!');
+	} else {
+		data = await cache.get('bundle');
+	}
+	return data;
+}
+
+
+async function fetchFromBase (filename) {
+	for (let base of baseURLs) {
+		try {
+			return await fetch(base + filename).then(res => res.ok ? res : _throw(res));
+		} catch (e) { continue }
+	}
+	throw new Error('Failed fetching.');
+}
+
+function _throw (err) { throw err }
+
+function createUI_selectSPL (container, SPLs) {
+	let entity = {
+		update (input) { },
+		onchange (x) { },
+	};
+
+	$(container)
+	.empty()
+	.append('<div>StudienProgrammLeitung:</div>')
+	.append($('<select>')
+		.append('<option value="">--- Please select ---</option>')
+		.append(SPLs.map(({id, longname_de}) => $('<option></option>').attr('value', id).text(longname_de)))
+		.append($('<option></option>').attr('value', SPLs.map(mod => mod.id).join(',')).text('^^ Alle ^^'))
+		.on('change', ({currentTarget: {value: spl_ids}}) => entity.onchange(spl_ids.split(',').filter(x => x)))
+		.val("")
+		.trigger('change')
+	)
+	.children().last().focus();
+	return entity;
+}
+
+
+
+function createUI_selectFilter (container) {
+	let entity = {
+		update (input) { },
+		onchange (x) { },
+	};
+
+	let options = { today: 'Today', tomorrow: 'Tomorrow', exams: 'Exams' };
+	$(container)
+	.empty()
+	.append(
+		Object.keys(options)
+		.map(
+			(key) =>
+			$('<input type="button">')
+			.val(options[key])
+			.on('click', (event) => {
+				$(event.target).parent().attr('data-filter', key);
+				entity.onchange(key);
+			})
+			.attr('data-filter', key)
+		)
+	)
+	.children().first().click();
+	return entity;
+}
+
+function createUI_output (container, data_bundle) {
+	let state = { SPLs: [ ], filter: 'today' };
+	let entity = {
+		update (input) {
+			Object.assign(state, input);
+
+			// extract information from the bundle
+			let moduleIds = state.SPLs;
+			let courseIds = [].concat(...moduleIds.map(id => data_bundle['moduleId->courseIds'][id]));
+			let infos = courseIds.map(id => data_bundle['courseId->course'][id]);
+			infos = infos.concat([].concat(...moduleIds.map(id => data_bundle['moduleId->exams'][id])));
+
+			// then filter it
+			// first, replace 'events' by 'exams' if desired
+			(state.filter == 'exams') && infos.forEach(info => info.events = info.exams);
+			// then select those in the specified time range
+			let todayMidnight = new Date(new Date().setHours(0,0,0,0));
+			infos.forEach(info =>  info.events = info.events.filter({
+				today:    event => isInRange(0, (new Date(event.begin) - todayMidnight) /1000/3600/24,  1),
+				tomorrow: event => isInRange(1, (new Date(event.begin) - todayMidnight) /1000/3600/24,  2),
+				exams:    event => isInRange(0, (new Date(event.begin) - todayMidnight) /1000/3600/24, 56), // eight week preview
+			}[state.filter]
+			));
+			infos = infos.filter(
+				info => info.events.length > 0
+			);
+			infos = infos.sort(
+				(a, b) => a.events[0].begin > b.events[0].begin ? 1 : -1
+			);
+
+			// then present it
+			$(container)
+			.empty()
+			.append(...infos.map(
+				info => [
+					$('<span>').html(
+						$('<span>').text(info.events.map(event => `${formatTimeRange(event.begin, event.end)}   _${event.address}_`).join(',\n') + '\n')
+						.html().replace(/(\s*)_([^_]*)_([^\n]*)/g, '$3$1<small>$2</small>')
+					),
+					textNode('\t=> '),
+					$('<a target="_blank">')
+						// .attr('href', `https://ufind.univie.ac.at/de/course.html?lv=${info.id}&semester=2018W`)
+						.attr('href', info.href)
+						.text(`${info.id}  ${info.type} ${info.longname_de}\n`),
+					$('\n'),
+				]
+			));
+		},
+		onchange (x) { },
+	};
+	return entity;
+}
+
+
+function isInRange (min, val, max) {
+	return min <= val && val <= max;
+}
+function formatTimeRange (begin, end, lang = 'de-DE') {
+	return (
+		new Date(begin).toLocaleString(lang, { day: 'numeric', month: '2-digit', hour: 'numeric', minute: '2-digit' })
+		+ ' - ' +
+		new Date(end).toLocaleString(lang, { hour: 'numeric', minute: '2-digit' })
+	)
+}
+function textNode (text) {
+	return document.createTextNode(text);
+}
+
+async function main () {
+	const data = await load_data();
+	console.log(data);
+
+	let container_root   = $('<div>').appendTo(window.document.body);
+	let container_spl    = $('<div>').appendTo(container_root).addClass(['input-field']);
+	let container_filter = $('<div>').appendTo(container_root).addClass(['input-field', 'select-filter']);
+	let container_output = $('<div>').appendTo(container_root).addClass(['input-field', 'output-field']);
+	let ui_SPL    = createUI_selectSPL(container_spl, data.modules);
+	let ui_filter = createUI_selectFilter(container_filter);
+	let ui_output = createUI_output(container_output, data);
+	ui_SPL.onchange = function (state) {     // e.g. state = ['123456', '123457']
+		ui_output.update({SPLs: state});
+	};
+	ui_filter.onchange = function (state) {  // e.g. state = 'today'
+		ui_output.update({filter: state});
+	};
+}
+
+window.onload = main;
+</script>
